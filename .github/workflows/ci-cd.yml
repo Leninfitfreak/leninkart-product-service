@@ -1,4 +1,4 @@
-name: CI/CD for product-service (dev → staging → prod)
+name: CI/CD for product-service
 
 on:
   push:
@@ -8,116 +8,105 @@ on:
       - main
 
 env:
-  GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
-  GKE_REGION: ${{ secrets.GKE_REGION }}
-  GKE_CLUSTER: ${{ secrets.GKE_CLUSTER }}
+  SERVICE_NAME: product-service
+  REGION: ${{ secrets.GKE_REGION }}
+  PROJECT_ID: ${{ secrets.GCP_PROJECT }}
   ARTIFACT_REPO: ${{ secrets.ARTIFACT_REPO }}
-  IMAGE_BASE: asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${{ secrets.ARTIFACT_REPO }}/product-service
+  CLUSTER: ${{ secrets.GKE_CLUSTER }}
+  IMAGE_BASE: asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${{ secrets.ARTIFACT_REPO }}
 
 jobs:
 
-  # ============================
-  # 1️⃣ BUILD & PUSH DOCKER IMAGE
-  # ============================
+  # ------------------- BUILD -------------------
   build:
     runs-on: ubuntu-latest
 
     outputs:
-      IMAGE: ${{ steps.build-image.outputs.IMAGE }}
+      image: ${{ steps.build-image.outputs.image }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Authenticate to GCP
+      - name: Auth GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Configure Docker
-        run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+      - run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 
-      - name: Build & Tag Image
+      - name: Build Docker Image
         id: build-image
         run: |
-          IMAGE_TAG=${{ github.sha }}
-          IMAGE="$IMAGE_BASE:$IMAGE_TAG"
+          TAG=${{ github.sha }}
+          IMAGE="$IMAGE_BASE/$SERVICE_NAME:$TAG"
           docker build -t $IMAGE .
-          echo "IMAGE=$IMAGE" >> $GITHUB_OUTPUT
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+  # ------------------- PUSH -------------------
+  push:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Auth GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 
       - name: Push Image
-        run: docker push ${{ steps.build-image.outputs.IMAGE }}
+        run: docker push ${{ needs.build.outputs.image }}
 
-  # ============================
-  # 2️⃣ DEPLOY TO GKE
-  # ============================
+  # ------------------- DEPLOY -------------------
   deploy:
-    needs: build
     runs-on: ubuntu-latest
-
-    outputs:
-      NAMESPACE: ${{ steps.ns.outputs.namespace }}
+    needs: push
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Authenticate to GCP
+      - name: Auth GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Get GKE credentials
+      - name: Get GKE Credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
-          cluster_name: ${{ env.GKE_CLUSTER }}
-          location: ${{ env.GKE_REGION }}
-          project_id: ${{ env.GCP_PROJECT }}
+          cluster_name: ${{ env.CLUSTER }}
+          location: ${{ env.REGION }}
+          project_id: ${{ env.PROJECT_ID }}
 
-      - name: Determine Namespace (dev/staging/prod)
-        id: ns
+      - name: Determine Namespace
+        id: env-namespace
         run: |
-          BRANCH="${GITHUB_REF##*/}"
-          if [[ "$BRANCH" == "dev" ]]; then
+          BR="${GITHUB_REF##*/}"
+          if [[ "$BR" == "dev" ]]; then
             echo "namespace=leninkart-dev" >> $GITHUB_OUTPUT
-          elif [[ "$BRANCH" == "staging" ]]; then
+            echo "svcType=ClusterIP" >> $GITHUB_OUTPUT
+          elif [[ "$BR" == "staging" ]]; then
             echo "namespace=leninkart-staging" >> $GITHUB_OUTPUT
+            echo "svcType=LoadBalancer" >> $GITHUB_OUTPUT
           else
             echo "namespace=leninkart-prod" >> $GITHUB_OUTPUT
+            echo "svcType=LoadBalancer" >> $GITHUB_OUTPUT
           fi
 
-      - name: Prepare manifest
+      - name: Prepare K8s Manifests
         run: |
-          cp k8s/deployment.yaml deployment.out.yaml
-          sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.IMAGE }}|g" deployment.out.yaml
+          mkdir output
+          cp k8s/deployment.yaml output/deployment.out.yaml
+          cp k8s/service.yaml output/service.out.yaml
 
-      - name: Apply manifests
+          sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image }}|g" output/deployment.out.yaml
+          sed -i "s|type:.*|type: ${{ steps.env-namespace.outputs.svcType }}|g" output/service.out.yaml
+
+      - name: Apply K8s Files
         run: |
-          kubectl apply -n ${{ steps.ns.outputs.namespace }} -f deployment.out.yaml
-          kubectl apply -n ${{ steps.ns.outputs.namespace }} -f k8s/service.yaml
+          kubectl apply -n ${{ steps.env-namespace.outputs.namespace }} -f output/deployment.out.yaml
+          kubectl apply -n ${{ steps.env-namespace.outputs.namespace }} -f output/service.out.yaml
 
-  # ============================
-  # 3️⃣ VERIFY DEPLOYMENT
-  # ============================
-  verify:
-    needs: deploy
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Get GKE credentials
-        uses: google-github-actions/get-gke-credentials@v2
-        with:
-          cluster_name: ${{ secrets.GKE_CLUSTER }}
-          location: ${{ secrets.GKE_REGION }}
-          project_id: ${{ secrets.GCP_PROJECT }}
-
-      - name: Verify Rollout
+      - name: Rollout Status
         run: |
-          kubectl rollout status -n ${{ needs.deploy.outputs.NAMESPACE }} deployment/product-service
-          kubectl get pods -n ${{ needs.deploy.outputs.NAMESPACE }}
-          kubectl get svc -n ${{ needs.deploy.outputs.NAMESPACE }}
+          kubectl rollout status -n ${{ steps.env-namespace.outputs.namespace }} deployment/${{ env.SERVICE_NAME }}
