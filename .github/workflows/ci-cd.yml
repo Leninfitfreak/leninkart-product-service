@@ -34,15 +34,16 @@ jobs:
       - name: Build & Push Docker Image
         id: build-image
         run: |
-          TAG=${{ github.sha }}
-          IMAGE="$IMAGE_BASE/$SERVICE_NAME:$TAG"
+          TAG="${{ github.sha }}"
 
-          echo "Building image: $IMAGE"
+          IMAGE="${IMAGE_BASE}/${SERVICE_NAME}:${TAG}"
+          echo "Final Image: $IMAGE"
 
-          docker build -t $IMAGE .
-          docker push $IMAGE
-
+          # Export image name to GitHub outputs
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
 
 
   deploy:
@@ -69,7 +70,6 @@ jobs:
         id: ns
         run: |
           BRANCH="${GITHUB_REF##*/}"
-
           if [[ "$BRANCH" == "dev" ]]; then
             echo "namespace=leninkart-dev" >> $GITHUB_OUTPUT
           elif [[ "$BRANCH" == "staging" ]]; then
@@ -78,16 +78,20 @@ jobs:
             echo "namespace=leninkart-prod" >> $GITHUB_OUTPUT
           fi
 
-      - name: Substitute image in deployment
+      - name: Debug image
         run: |
-          mkdir output
+          echo "Image received from build job:"
+          echo ">> ${{ needs.build.outputs.image }}"
+
+      - name: Prepare manifest files
+        run: |
+          mkdir -p output
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
           sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image }}|g" output/deployment.yaml
 
-          echo "Using image: ${{ needs.build.outputs.image }}"
-          echo "--- Deployment file after substitution ---"
+          echo "--- Final deployment.yaml ---"
           cat output/deployment.yaml
 
       - name: Apply manifests
