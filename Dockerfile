@@ -6,4 +6,4 @@ RUN mvn -T1C -DskipTests clean package -DskipTests=true
 FROM eclipse-temurin:17-jdk-jammy
 WORKDIR /app
 COPY --from=builder /app/target/*.jar app.jar
-ENTRYPOINT ["sh","-c","java -jar /app/app.jar"]
+ENTRYPOINT ["sh","-c","java -jar /app/app.jar"]   
