@@ -34,24 +34,21 @@ jobs:
       - name: Build & Push Docker Image
         id: build-image
         run: |
-          TAG="${{ github.sha }}"
-          IMAGE="${IMAGE_BASE}/${SERVICE_NAME}:${TAG}"
+          TAG=${{ github.sha }}
+          IMAGE="$IMAGE_BASE/$SERVICE_NAME:$TAG"
 
           echo "Building image: $IMAGE"
+          docker build -t $IMAGE .
+          docker push $IMAGE
 
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
-
-          # Export output
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
-
+          echo "IMAGE OUTPUT SET TO: $IMAGE"
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -67,16 +64,14 @@ jobs:
           location: ${{ secrets.GKE_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
 
-      # DEBUG: Print the image value passed from build job
-      - name: DEBUG — print image output
+      - name: Debug — show received image
         run: |
-          echo "DEBUG: Image from build job = '${{ needs.build.outputs.image }}'"
+          echo "IMAGE RECEIVED FROM BUILD: ${{ needs.build.outputs.image }}"
 
       - name: Determine namespace based on branch
         id: ns
         run: |
           BRANCH="${GITHUB_REF##*/}"
-          echo "Branch detected: $BRANCH"
 
           if [[ "$BRANCH" == "dev" ]]; then
             echo "namespace=leninkart-dev" >> $GITHUB_OUTPUT
@@ -88,18 +83,19 @@ jobs:
 
       - name: Substitute image in deployment
         run: |
-          mkdir -p output
+          mkdir output
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
-          echo "Substituting image in YAML..."
-          sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image }}|g" output/deployment.yaml
+          IMAGE="${{ needs.build.outputs.image }}"
 
-      - name: DEBUG — print final deployment.yaml
-        run: |
-          echo "===== FINAL DEPLOYMENT YAML ====="
+          echo "--- BEFORE SED ---"
           cat output/deployment.yaml
-          echo "================================="
+
+          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" output/deployment.yaml
+
+          echo "--- AFTER SED ---"
+          cat output/deployment.yaml
 
       - name: Apply manifests
         run: |
