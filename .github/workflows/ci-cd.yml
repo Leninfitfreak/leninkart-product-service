@@ -59,7 +59,7 @@ jobs:
         run: docker push ${{ needs.build.outputs.image }}
 
   # ------------------- DEPLOY -------------------
-  deploy:
+    deploy:
     runs-on: ubuntu-latest
     needs: push
 
@@ -102,11 +102,8 @@ jobs:
           sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image }}|g" output/deployment.out.yaml
           sed -i "s|type:.*|type: ${{ steps.env-namespace.outputs.svcType }}|g" output/service.out.yaml
 
-      - name: Apply K8s Files
+      - name: Apply manifests to namespace
         run: |
           kubectl apply -n ${{ steps.env-namespace.outputs.namespace }} -f output/deployment.out.yaml
           kubectl apply -n ${{ steps.env-namespace.outputs.namespace }} -f output/service.out.yaml
 
-      - name: Rollout Status
-        run: |
-          kubectl rollout status -n ${{ steps.env-namespace.outputs.namespace }} deployment/${{ env.SERVICE_NAME }}
