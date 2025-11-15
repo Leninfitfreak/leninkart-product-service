@@ -1,0 +1,69 @@
+name: CI/CD for product-service (dev → staging → prod)
+
+on:
+  push:
+    branches:
+      - dev
+      - staging
+      - main
+
+env:
+  IMAGE_BASE: asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${{ secrets.ARTIFACT_REPO }}/product-service
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+
+      - name: Build Docker Image
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          IMAGE="$IMAGE_BASE:$IMAGE_TAG"
+          docker build -t $IMAGE .
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Push Image
+        run: |
+          docker push $IMAGE
+
+      - name: Get GKE Credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ secrets.GKE_CLUSTER }}
+          location: ${{ secrets.GKE_REGION }}
+          project_id: ${{ secrets.GCP_PROJECT }}
+
+      - name: Determine namespace based on branch
+        id: ns
+        run: |
+          if [[ "${GITHUB_REF##*/}" == "dev" ]]; then
+            echo "namespace=leninkart-dev" >> $GITHUB_OUTPUT
+          elif [[ "${GITHUB_REF##*/}" == "staging" ]]; then
+            echo "namespace=leninkart-staging" >> $GITHUB_OUTPUT
+          else
+            echo "namespace=leninkart-prod" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Substitute image in deployment
+        run: |
+          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" k8s/deployment.yaml
+
+      - name: Apply manifests to namespace
+        run: |
+          kubectl apply -n ${{ steps.ns.outputs.namespace }} -f k8s/deployment.yaml
+          kubectl apply -n ${{ steps.ns.outputs.namespace }} -f k8s/service.yaml
+
+      - name: Verify rollout
+        run: |
+          kubectl rollout status -n ${{ steps.ns.outputs.namespace }} deployment/product-service
