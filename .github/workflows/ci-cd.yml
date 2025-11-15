@@ -83,11 +83,13 @@ jobs:
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
-      - name: Inject image into deployment manifest
+      - name: Inject image into deployment (safe replace)
         run: |
           IMAGE="${{ needs.build.outputs.image }}"
+
           echo "Using image: $IMAGE"
 
+          # Replace ONLY IMAGE_PLACEHOLDER (bullet-proof)
           sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" output/deployment.yaml
 
           echo "--- Final Deployment YAML ---"
