@@ -37,9 +37,9 @@ jobs:
           TAG=${{ github.sha }}
           IMAGE="${IMAGE_BASE}/${SERVICE_NAME}:${TAG}"
 
-          echo "Building ==> $IMAGE"
+          echo "Built image: $IMAGE"
 
-          # export image for deploy job
+          # export for deploy job
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
           docker build -t "$IMAGE" .
@@ -86,12 +86,14 @@ jobs:
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
-      - name: Substitute image in deployment
+      - name: Substitute image
         run: |
-          echo "Replacing IMAGE_PLACEHOLDER with: ${{ needs.build.outputs.image }}"
+          echo "IMAGE FROM BUILD JOB:"
+          echo "IMAGE=${{ needs.build.outputs.image }}"
+
           sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image }}|g" output/deployment.yaml
 
-          echo "--- FINAL DEPLOYMENT ---"
+          echo "--- Final Deployment YAML ---"
           cat output/deployment.yaml
 
       - name: Apply manifests
