@@ -86,11 +86,9 @@ jobs:
       - name: Inject image into deployment manifest
         run: |
           IMAGE="${{ needs.build.outputs.image }}"
-
           echo "Using image: $IMAGE"
 
-          # Overwrite the entire image line reliably
-          sed -i "s|image:.*|image: $IMAGE|g" output/deployment.yaml
+          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" output/deployment.yaml
 
           echo "--- Final Deployment YAML ---"
           cat output/deployment.yaml
