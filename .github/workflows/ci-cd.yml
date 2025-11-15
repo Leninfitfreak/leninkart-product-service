@@ -42,7 +42,7 @@ jobs:
           docker push $IMAGE
 
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
-          echo "IMAGE OUTPUT SET TO: $IMAGE"
+
 
   deploy:
     needs: build
@@ -64,10 +64,6 @@ jobs:
           location: ${{ secrets.GKE_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
 
-      - name: Debug — show received image
-        run: |
-          echo "IMAGE RECEIVED FROM BUILD: ${{ needs.build.outputs.image }}"
-
       - name: Determine namespace based on branch
         id: ns
         run: |
@@ -81,26 +77,59 @@ jobs:
             echo "namespace=leninkart-prod" >> $GITHUB_OUTPUT
           fi
 
-      - name: Substitute image in deployment
+      - name: Prepare output manifests
         run: |
-          mkdir output
+          mkdir -p output
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
+      - name: Inject image into deployment manifest
+        run: |
           IMAGE="${{ needs.build.outputs.image }}"
 
-          echo "--- BEFORE SED ---"
-          cat output/deployment.yaml
+          echo "Using image: $IMAGE"
 
-          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" output/deployment.yaml
+          # Overwrite the entire image line reliably
+          sed -i "s|image:.*|image: $IMAGE|g" output/deployment.yaml
 
-          echo "--- AFTER SED ---"
+          echo "--- Final Deployment YAML ---"
           cat output/deployment.yaml
 
       - name: Apply manifests
         run: |
           kubectl apply -n ${{ steps.ns.outputs.namespace }} -f output/deployment.yaml
           kubectl apply -n ${{ steps.ns.outputs.namespace }} -f output/service.yaml
+
+
+  verify:
+    needs: deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Get GKE Credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ secrets.GKE_CLUSTER }}
+          location: ${{ secrets.GKE_REGION }}
+          project_id: ${{ secrets.GCP_PROJECT }}
+
+      - name: Determine namespace based on branch
+        id: ns
+        run: |
+          BRANCH="${GITHUB_REF##*/}"
+
+          if [[ "$BRANCH" == "dev" ]]; then
+            echo "namespace=leninkart-dev" >> $GITHUB_OUTPUT
+          elif [[ "$BRANCH" == "staging" ]]; then
+            echo "namespace=leninkart-staging" >> $GITHUB_OUTPUT
+          else
+            echo "namespace=leninkart-prod" >> $GITHUB_OUTPUT
+          fi
 
       - name: Verify rollout
         run: |
