@@ -12,8 +12,9 @@ env:
   IMAGE_BASE: asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${{ secrets.ARTIFACT_REPO }}
 
 jobs:
+
   # ──────────────────────────────
-  # 1. BUILD & PUSH IMAGE
+  # 1. Build and Push Image
   # ──────────────────────────────
   build:
     runs-on: ubuntu-latest
@@ -30,7 +31,7 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Configure Docker for Artifact Registry
+      - name: Configure Docker
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 
       - name: Build & Push Docker Image
@@ -43,12 +44,12 @@ jobs:
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
-          # FINAL FIX: Output IMAGE correctly
+          # CORRECT → Export image to next job
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
 
   # ──────────────────────────────
-  # 2. DEPLOY TO GKE
+  # 2. Deploy to GKE
   # ──────────────────────────────
   deploy:
     needs: build
@@ -106,7 +107,7 @@ jobs:
           echo "--- FINAL DEPLOYMENT YAML ---"
           cat output/deployment.yaml
 
-      - name: Apply Kubernetes Manifests
+      - name: Apply Manifests
         run: |
           NS="${{ steps.ns.outputs.ns }}"
           kubectl apply -n "$NS" -f output/deployment.yaml
@@ -114,7 +115,7 @@ jobs:
 
 
   # ──────────────────────────────
-  # 3. VERIFY ROLLOUT
+  # 3. Verify Deployment
   # ──────────────────────────────
   verify:
     needs: deploy
@@ -145,7 +146,7 @@ jobs:
             echo "ns=leninkart-prod" >> $GITHUB_OUTPUT
           fi
 
-      - name: Verify Deployment Rollout
+      - name: Wait for Rollout
         run: |
           kubectl rollout status deployment/product-service \
             -n "${{ steps.ns.outputs.ns }}" --timeout=300s
