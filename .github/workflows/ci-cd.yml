@@ -1,5 +1,6 @@
 name: CI/CD for product-service (dev → staging → prod)
 
+# run on push to branches used for environments
 on:
   push:
     branches:
@@ -7,15 +8,27 @@ on:
       - staging
       - main
 
+permissions:
+  contents: write   # needed if we use GITHUB_TOKEN to push to infra repo
+  id-token: write
+
 env:
+  SERVICE_NAME: product-service
   IMAGE_BASE: asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${{ secrets.ARTIFACT_REPO }}/product-service
+  INFRA_REPO: ${{ secrets.INFRA_REPO }}             # e.g. Leninfitfreak/leninkart-infra
+  INFRA_CHART_PATH: helm/product-service            # path inside infra repo to the chart
+  VALUES_PATH: helm/product-service/values.yaml     # file to update inside infra repo
 
 jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
 
+  build:
+    name: Build & Push image
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.set-output.outputs.image }}
+      short_sha: ${{ steps.set-output.outputs.short_sha }}
     steps:
-      - name: Checkout
+      - name: Checkout product repo
         uses: actions/checkout@v4
 
       - name: Authenticate to GCP
@@ -23,47 +36,150 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Configure Docker
+      - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 
-      - name: Build Docker Image
+      - name: Set image variables
+        id: set-vars
         run: |
-          IMAGE_TAG=${{ github.sha }}
-          IMAGE="$IMAGE_BASE:$IMAGE_TAG"
-          docker build -t $IMAGE .
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          FULL_SHA=${{ github.sha }}
+          SHORT_SHA=${FULL_SHA:0:7}
+          BRANCH_SAFE=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          TAG="${BRANCH_SAFE}-${SHORT_SHA}"
+          IMAGE="${IMAGE_BASE}:${TAG}"
+          echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
 
-      - name: Push Image
+      - name: Build & Push Docker image
         run: |
-          docker push $IMAGE
+          echo "Building image: ${{ steps.set-vars.outputs.image }}"
+          docker build -t ${{ steps.set-vars.outputs.image }} .
+          docker push ${{ steps.set-vars.outputs.image }}
 
-      - name: Get GKE Credentials
+      - name: Expose image output
+        id: set-output
+        run: |
+          echo "image=${{ steps.set-vars.outputs.image }}" >> $GITHUB_OUTPUT
+          echo "short_sha=${{ steps.set-vars.outputs.SHORT_SHA }}" >> $GITHUB_OUTPUT
+
+  update-infra:
+    name: Update infra chart values (commit to infra repo)
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_TO_SET: ${{ needs.build.outputs.image }}
+      INFRA_REPO: ${{ env.INFRA_REPO }}
+      INFRA_CHART_PATH: ${{ env.INFRA_CHART_PATH }}
+      VALUES_PATH: ${{ env.VALUES_PATH }}
+    steps:
+      - name: Checkout a small workspace
+        run: mkdir infra && cd infra && git init && git remote add origin https://github.com/${INFRA_REPO}.git
+      - name: Configure git (for commits)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare token for pushing to infra repo
+        id: auth
+        run: |
+          if [ -n "${{ secrets.INFRA_REPO_TOKEN }}" ]; then
+            echo "USE_PAT=true" >> $GITHUB_OUTPUT
+          else
+            echo "USE_PAT=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fetch infra repo (shallow)
+        if: steps.auth.outputs.USE_PAT == 'true'
+        env:
+          INFRA_PAT: ${{ secrets.INFRA_REPO_TOKEN }}
+        run: |
+          git clone --depth 1 https://x-access-token:${INFRA_PAT}@github.com/${INFRA_REPO}.git infra
+        # fallback: use GITHUB_TOKEN (same org/repo) - only works if this workflow can push there
+      - name: Fetch infra repo (with GITHUB_TOKEN fallback)
+        if: steps.auth.outputs.USE_PAT == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone --depth 1 https://x-access-token:${GITHUB_TOKEN}@github.com/${INFRA_REPO}.git infra
+
+      - name: Install yq
+        run: |
+          wget https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64 -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+
+      - name: Update values.yaml with new image
+        working-directory: infra
+        run: |
+          echo "Setting image to: ${IMAGE_TO_SET}"
+          # The chart's values.yaml should have an 'image:' block we can set (see comments below)
+          yq eval ".image.repository = \"${IMAGE_TO_SET%:*}\" | .image.tag = \"${IMAGE_TO_SET##*:}\"" -i ${VALUES_PATH} || \
+          # If values.yaml has a single 'image' string, fallback to setting that:
+          (yq eval ".image = \"${IMAGE_TO_SET}\"" -i ${VALUES_PATH} || true)
+          echo "---- updated file -----"
+          sed -n '1,200p' ${VALUES_PATH} || true
+
+      - name: Commit & push change to infra repo
+        working-directory: infra
+        env:
+          COMMIT_MSG: "ci: update product-service image -> ${{ needs.build.outputs.image }}"
+        run: |
+          git add ${VALUES_PATH} || true
+          git commit -m "${COMMIT_MSG}" || (echo "No changes to commit"; exit 0)
+          # push back
+          if [ -n "${{ secrets.INFRA_REPO_TOKEN }}" ]; then
+            git push https://x-access-token:${{ secrets.INFRA_REPO_TOKEN }}@github.com/${INFRA_REPO}.git HEAD:main
+          else
+            # use default GITHUB_TOKEN (works when infra repo = same repo and token has rights)
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${INFRA_REPO}.git HEAD:main
+
+  trigger-argocd-sync:
+    name: (optional) Trigger ArgoCD sync
+    needs: update-infra
+    runs-on: ubuntu-latest
+    if: ${{ secrets.ARGOCD_SERVER && secrets.ARGOCD_AUTH_TOKEN && secrets.ARGOCD_APP_NAME }}
+    steps:
+      - name: Install argocd CLI
+        run: |
+          curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x /usr/local/bin/argocd
+
+      - name: Login to ArgoCD (token)
+        run: |
+          argocd login ${{ secrets.ARGOCD_SERVER }} --auth-token ${{ secrets.ARGOCD_AUTH_TOKEN }} --insecure
+
+      - name: Sync ArgoCD App
+        run: |
+          argocd app sync ${{ secrets.ARGOCD_APP_NAME }} --grpc-web
+          argocd app wait ${{ secrets.ARGOCD_APP_NAME }} --health --timeout 300
+
+  verify:
+    name: Verify rollout (quick)
+    needs: trigger-argocd-sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Get GKE credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: ${{ secrets.GKE_CLUSTER }}
           location: ${{ secrets.GKE_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
 
-      - name: Determine namespace based on branch
+      - name: Determine namespace for this branch
         id: ns
         run: |
-          if [[ "${GITHUB_REF##*/}" == "dev" ]]; then
-            echo "namespace=leninkart-dev" >> $GITHUB_OUTPUT
-          elif [[ "${GITHUB_REF##*/}" == "staging" ]]; then
-            echo "namespace=leninkart-staging" >> $GITHUB_OUTPUT
-          else
-            echo "namespace=leninkart-prod" >> $GITHUB_OUTPUT
+          BR="${GITHUB_REF##*/}"
+          if [[ "$BR" == "dev" ]]; then echo "ns=leninkart-dev" >> $GITHUB_OUTPUT
+          elif [[ "$BR" == "staging" ]]; then echo "ns=leninkart-staging" >> $GITHUB_OUTPUT
+          else echo "ns=leninkart-prod" >> $GITHUB_OUTPUT
           fi
 
-      - name: Substitute image in deployment
+      - name: Wait for deployment rollout
         run: |
-          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" k8s/deployment.yaml
+          NS="${{ steps.ns.outputs.ns }}"
+          kubectl rollout status deployment/product-service -n "$NS" --timeout=180s || kubectl get pods -n "$NS" -o wide
 
-      - name: Apply manifests to namespace
-        run: |
-          kubectl apply -n ${{ steps.ns.outputs.namespace }} -f k8s/deployment.yaml
-          kubectl apply -n ${{ steps.ns.outputs.namespace }} -f k8s/service.yaml
-
-      - name: Verify rollout
-        run: |
-          kubectl rollout status -n ${{ steps.ns.outputs.namespace }} deployment/product-service
