@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image: ${{ steps.build-image.outputs.image }}
+      image: ${{ steps.build.outputs.image }}
 
     steps:
       - name: Checkout
@@ -28,21 +28,20 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Configure Docker auth
+      - name: Configure Docker
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 
       - name: Build & Push Docker Image
-        id: build-image
+        id: build
         run: |
           TAG=${{ github.sha }}
           IMAGE="$IMAGE_BASE/$SERVICE_NAME:$TAG"
 
           echo "Building image: $IMAGE"
-
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
-          # Correctly export for next job
+          # Export final IMAGE output
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
 
@@ -66,11 +65,10 @@ jobs:
           location: ${{ secrets.GKE_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
 
-      - name: Detect environment namespace
-        id: ns
+      - name: Determine namespace
+        id: namespace
         run: |
           BRANCH="${GITHUB_REF##*/}"
-
           if [[ "$BRANCH" == "dev" ]]; then
             echo "ns=leninkart-dev" >> $GITHUB_OUTPUT
           elif [[ "$BRANCH" == "staging" ]]; then
@@ -85,21 +83,20 @@ jobs:
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
-      - name: Inject built image into manifest
+      - name: Inject image into deployment
         run: |
           IMAGE="${{ needs.build.outputs.image }}"
-
           echo "Using image: $IMAGE"
 
           sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" output/deployment.yaml
 
-          echo "------ FINAL DEPLOYMENT YAML -------"
+          echo "--- Final Deployment YAML ---"
           cat output/deployment.yaml
 
       - name: Apply manifests
         run: |
-          kubectl apply -n ${{ steps.ns.outputs.ns }} -f output/deployment.yaml
-          kubectl apply -n ${{ steps.ns.outputs.ns }} -f output/service.yaml
+          kubectl apply -n ${{ steps.namespace.outputs.ns }} -f output/deployment.yaml
+          kubectl apply -n ${{ steps.namespace.outputs.ns }} -f output/service.yaml
 
 
   verify:
@@ -119,11 +116,10 @@ jobs:
           location: ${{ secrets.GKE_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
 
-      - name: Detect environment namespace
-        id: ns
+      - name: Determine namespace
+        id: namespace
         run: |
           BRANCH="${GITHUB_REF##*/}"
-
           if [[ "$BRANCH" == "dev" ]]; then
             echo "ns=leninkart-dev" >> $GITHUB_OUTPUT
           elif [[ "$BRANCH" == "staging" ]]; then
@@ -134,4 +130,4 @@ jobs:
 
       - name: Verify rollout
         run: |
-          kubectl rollout status deployment/product-service -n ${{ steps.ns.outputs.ns }}
+          kubectl rollout status deployment/product-service -n ${{ steps.namespace.outputs.ns }}
