@@ -1,81 +1,62 @@
 name: CI/CD for product-service
-
 on:
   push:
     branches:
       - dev
       - staging
       - main
-
 env:
   SERVICE_NAME: product-service
   IMAGE_BASE: asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${{ secrets.ARTIFACT_REPO }}
-
 jobs:
-
   # ──────────────────────────────
   # 1. Build and Push Image
   # ──────────────────────────────
   build:
     runs-on: ubuntu-latest
-
     outputs:
       image: ${{ steps.export_image.outputs.image }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
-
       - name: Configure Docker
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
-
       - name: Build & Push Docker Image
         id: build_image
         run: |
           TAG="${{ github.sha }}"
           IMAGE="${IMAGE_BASE}/${SERVICE_NAME}:${TAG}"
-
           echo "Building image: $IMAGE"
-
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
-
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
-
       - name: Export Image for Next Job
         id: export_image
         run: |
           echo "image=${IMAGE}" >> $GITHUB_OUTPUT
-
-
   # ──────────────────────────────
   # 2. Deploy to GKE
   # ──────────────────────────────
   deploy:
     needs: build
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
-
       - name: Get GKE Credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: ${{ secrets.GKE_CLUSTER }}
           location: ${{ secrets.GKE_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
-
       - name: Determine Namespace
         id: ns
         run: |
@@ -87,58 +68,46 @@ jobs:
           else
             echo "ns=leninkart-prod" >> $GITHUB_OUTPUT
           fi
-
       - name: Install yq
         run: |
           wget https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64 -O /usr/local/bin/yq
           chmod +x /usr/local/bin/yq
-
       - name: Prepare Manifests
         run: |
           mkdir -p output
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
-
       - name: Inject Image into Deployment
         run: |
           IMAGE="${{ needs.build.outputs.image }}"
           echo "Injecting image: $IMAGE"
-
           yq eval ".spec.template.spec.containers[0].image = \"$IMAGE\"" \
             output/deployment.yaml > output/deployment-updated.yaml
-
           mv output/deployment-updated.yaml output/deployment.yaml
-
           echo "--- FINAL DEPLOYMENT YAML ---"
           cat output/deployment.yaml
-
       - name: Apply Manifests
         run: |
           NS="${{ steps.ns.outputs.ns }}"
           kubectl apply -n "$NS" -f output/deployment.yaml
           kubectl apply -n "$NS" -f output/service.yaml
-
-
   # ──────────────────────────────
   # 3. Verify Deployment
   # ──────────────────────────────
   verify:
     needs: deploy
     runs-on: ubuntu-latest
-
     steps:
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
-
       - name: Get GKE Credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: ${{ secrets.GKE_CLUSTER }}
           location: ${{ secrets.GKE_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
-
       - name: Determine Namespace
         id: ns
         run: |
@@ -150,7 +119,6 @@ jobs:
           else
             echo "ns=leninkart-prod" >> $GITHUB_OUTPUT
           fi
-
       - name: Wait for Deployment Rollout
         run: |
           kubectl rollout status deployment/product-service \
