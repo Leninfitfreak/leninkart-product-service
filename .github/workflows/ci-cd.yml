@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image: ${{ steps.export-image.outputs.image }}
+      image: ${{ steps.build-image.outputs.image }}
 
     steps:
       - name: Checkout
@@ -38,16 +38,11 @@ jobs:
           IMAGE="$IMAGE_BASE/$SERVICE_NAME:$TAG"
 
           echo "Building image: $IMAGE"
+
           docker build -t $IMAGE .
           docker push $IMAGE
 
-          # Export as environment variable for next step
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
-
-      - name: Export image output
-        id: export-image
-        run: |
-          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
 
 
@@ -75,7 +70,6 @@ jobs:
         id: ns
         run: |
           BRANCH="${GITHUB_REF##*/}"
-
           if [[ "$BRANCH" == "dev" ]]; then
             echo "namespace=leninkart-dev" >> $GITHUB_OUTPUT
           elif [[ "$BRANCH" == "staging" ]]; then
@@ -84,16 +78,15 @@ jobs:
             echo "namespace=leninkart-prod" >> $GITHUB_OUTPUT
           fi
 
-      - name: Prepare output manifests
+      - name: Prepare manifests
         run: |
           mkdir -p output
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
-      - name: Inject image into deployment (safe replace)
+      - name: Inject image into deployment
         run: |
           IMAGE="${{ needs.build.outputs.image }}"
-
           echo "Using image: $IMAGE"
 
           sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" output/deployment.yaml
