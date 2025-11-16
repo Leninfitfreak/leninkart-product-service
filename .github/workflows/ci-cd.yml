@@ -13,11 +13,14 @@ env:
 
 jobs:
 
+  # ──────────────────────────────
+  # 1. Build and Push Image
+  # ──────────────────────────────
   build:
     runs-on: ubuntu-latest
 
     outputs:
-      image: ${{ steps.build_image.outputs.image }}
+      image: ${{ steps.export_image.outputs.image }}
 
     steps:
       - name: Checkout
@@ -34,17 +37,25 @@ jobs:
       - name: Build & Push Docker Image
         id: build_image
         run: |
-          TAG=${{ github.sha }}
-          IMAGE="$IMAGE_BASE/$SERVICE_NAME:$TAG"
+          TAG="${{ github.sha }}"
+          IMAGE="${IMAGE_BASE}/${SERVICE_NAME}:${TAG}"
 
           echo "Building image: $IMAGE"
+
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
-          # Export output properly
-          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Export Image for Next Job
+        id: export_image
+        run: |
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
 
 
+  # ──────────────────────────────
+  # 2. Deploy to GKE
+  # ──────────────────────────────
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -65,8 +76,8 @@ jobs:
           location: ${{ secrets.GKE_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
 
-      - name: Determine namespace
-        id: namespace
+      - name: Determine Namespace
+        id: ns
         run: |
           BRANCH="${GITHUB_REF##*/}"
           if [[ "$BRANCH" == "dev" ]]; then
@@ -77,29 +88,40 @@ jobs:
             echo "ns=leninkart-prod" >> $GITHUB_OUTPUT
           fi
 
-      - name: Prepare manifests
+      - name: Install yq
+        run: |
+          wget https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64 -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+
+      - name: Prepare Manifests
         run: |
           mkdir -p output
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
-      - name: Inject image into manifest
+      - name: Inject Image into Deployment
         run: |
           IMAGE="${{ needs.build.outputs.image }}"
-          echo "Using image: $IMAGE"
+          echo "Injecting image: $IMAGE"
 
-          # Replace placeholder
-          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" output/deployment.yaml
+          yq eval ".spec.template.spec.containers[0].image = \"$IMAGE\"" \
+            output/deployment.yaml > output/deployment-updated.yaml
 
-          echo "--- Final Deployment YAML ---"
+          mv output/deployment-updated.yaml output/deployment.yaml
+
+          echo "--- FINAL DEPLOYMENT YAML ---"
           cat output/deployment.yaml
 
-      - name: Apply manifests
+      - name: Apply Manifests
         run: |
-          kubectl apply -n "${{ steps.namespace.outputs.ns }}" -f output/deployment.yaml
-          kubectl apply -n "${{ steps.namespace.outputs.ns }}" -f output/service.yaml
+          NS="${{ steps.ns.outputs.ns }}"
+          kubectl apply -n "$NS" -f output/deployment.yaml
+          kubectl apply -n "$NS" -f output/service.yaml
 
 
+  # ──────────────────────────────
+  # 3. Verify Deployment
+  # ──────────────────────────────
   verify:
     needs: deploy
     runs-on: ubuntu-latest
@@ -117,7 +139,7 @@ jobs:
           location: ${{ secrets.GKE_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
 
-      - name: Determine namespace
+      - name: Determine Namespace
         id: ns
         run: |
           BRANCH="${GITHUB_REF##*/}"
@@ -129,6 +151,7 @@ jobs:
             echo "ns=leninkart-prod" >> $GITHUB_OUTPUT
           fi
 
-      - name: Verify rollout
+      - name: Wait for Deployment Rollout
         run: |
-          kubectl rollout status deployment/product-service -n "${{ steps.ns.outputs.ns }}"
+          kubectl rollout status deployment/product-service \
+            -n "${{ steps.ns.outputs.ns }}" --timeout=300s
