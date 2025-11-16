@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image: ${{ steps.build-image.outputs.image }}
+      image: ${{ steps.export.outputs.image }}
 
     steps:
       - name: Checkout
@@ -32,18 +32,21 @@ jobs:
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 
       - name: Build & Push Docker Image
-        id: build-image
+        id: build
         run: |
           TAG=${{ github.sha }}
           IMAGE="$IMAGE_BASE/$SERVICE_NAME:$TAG"
 
           echo "Building image: $IMAGE"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
 
-          docker build -t $IMAGE .
-          docker push $IMAGE
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-          echo "image=$IMAGE" >> $GITHUB_OUTPUT
-
+      - name: Export Image Output
+        id: export
+        run: |
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
 
 
   deploy:
@@ -66,16 +69,16 @@ jobs:
           location: ${{ secrets.GKE_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
 
-      - name: Determine namespace based on branch
-        id: ns
+      - name: Determine namespace
+        id: namespace
         run: |
           BRANCH="${GITHUB_REF##*/}"
           if [[ "$BRANCH" == "dev" ]]; then
-            echo "namespace=leninkart-dev" >> $GITHUB_OUTPUT
+            echo "ns=leninkart-dev" >> $GITHUB_OUTPUT
           elif [[ "$BRANCH" == "staging" ]]; then
-            echo "namespace=leninkart-staging" >> $GITHUB_OUTPUT
+            echo "ns=leninkart-staging" >> $GITHUB_OUTPUT
           else
-            echo "namespace=leninkart-prod" >> $GITHUB_OUTPUT
+            echo "ns=leninkart-prod" >> $GITHUB_OUTPUT
           fi
 
       - name: Prepare manifests
@@ -84,21 +87,19 @@ jobs:
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
-      - name: Inject image into deployment
+      - name: Inject image into manifest
         run: |
-          IMAGE="${{ needs.build.outputs.image }}"
-          echo "Using image: $IMAGE"
+          echo "Using image: ${{ needs.build.outputs.image }}"
 
-          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" output/deployment.yaml
+          sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image }}|g" output/deployment.yaml
 
-          echo "--- Final Deployment YAML ---"
+          echo "----- Final Deployment YAML -----"
           cat output/deployment.yaml
 
       - name: Apply manifests
         run: |
-          kubectl apply -n ${{ steps.ns.outputs.namespace }} -f output/deployment.yaml
-          kubectl apply -n ${{ steps.ns.outputs.namespace }} -f output/service.yaml
-
+          kubectl apply -n ${{ steps.namespace.outputs.ns }} -f output/deployment.yaml
+          kubectl apply -n ${{ steps.namespace.outputs.ns }} -f output/service.yaml
 
 
   verify:
@@ -118,18 +119,18 @@ jobs:
           location: ${{ secrets.GKE_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
 
-      - name: Determine namespace based on branch
-        id: ns
+      - name: Determine namespace
+        id: namespace
         run: |
           BRANCH="${GITHUB_REF##*/}"
           if [[ "$BRANCH" == "dev" ]]; then
-            echo "namespace=leninkart-dev" >> $GITHUB_OUTPUT
+            echo "ns=leninkart-dev" >> $GITHUB_OUTPUT
           elif [[ "$BRANCH" == "staging" ]]; then
-            echo "namespace=leninkart-staging" >> $GITHUB_OUTPUT
+            echo "ns=leninkart-staging" >> $GITHUB_OUTPUT
           else
-            echo "namespace=leninkart-prod" >> $GITHUB_OUTPUT
+            echo "ns=leninkart-prod" >> $GITHUB_OUTPUT
           fi
 
       - name: Verify rollout
         run: |
-          kubectl rollout status deployment/product-service -n ${{ steps.ns.outputs.namespace }}
+          kubectl rollout status deployment/product-service -n ${{ steps.namespace.outputs.ns }}
