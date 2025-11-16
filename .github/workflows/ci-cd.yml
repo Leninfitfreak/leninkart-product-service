@@ -12,9 +12,8 @@ env:
   IMAGE_BASE: asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${{ secrets.ARTIFACT_REPO }}
 
 jobs:
-
   # ──────────────────────────────
-  # 1. Build and Push Image
+  # 1. Build & Push Docker Image
   # ──────────────────────────────
   build:
     runs-on: ubuntu-latest
@@ -23,7 +22,7 @@ jobs:
       image: ${{ steps.build_image.outputs.image }}
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Authenticate to GCP
@@ -31,7 +30,7 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Configure Docker
+      - name: Configure Docker Authentication
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 
       - name: Build & Push Docker Image
@@ -40,13 +39,12 @@ jobs:
           TAG="${{ github.sha }}"
           IMAGE="${IMAGE_BASE}/${SERVICE_NAME}:${TAG}"
 
-          echo "Building image: $IMAGE"
+          echo "Building Docker image: $IMAGE"
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
-          # CORRECT → Export image to next job
+          # EXPORT IMAGE CORRECTLY (THIS FIXES YOUR ISSUE)
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
-
 
   # ──────────────────────────────
   # 2. Deploy to GKE
@@ -88,34 +86,31 @@ jobs:
           wget https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64 -O /usr/local/bin/yq
           chmod +x /usr/local/bin/yq
 
-      - name: Prepare Manifests
+      - name: Prepare Kubernetes Manifests
         run: |
           mkdir -p output
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
-      - name: Inject Image into Deployment
+      - name: Inject Image Into Deployment YAML
         run: |
           IMAGE="${{ needs.build.outputs.image }}"
-          echo "Injecting image: $IMAGE"
+          echo "Injecting Docker image: $IMAGE"
 
-          yq eval ".spec.template.spec.containers[0].image = \"$IMAGE\"" \
-            output/deployment.yaml > output/deployment-updated.yaml
-
-          mv output/deployment-updated.yaml output/deployment.yaml
+          yq eval ".spec.template.spec.containers[0].image = \"$IMAGE\"" output/deployment.yaml > output/tmp.yaml
+          mv output/tmp.yaml output/deployment.yaml
 
           echo "--- FINAL DEPLOYMENT YAML ---"
           cat output/deployment.yaml
 
-      - name: Apply Manifests
+      - name: Apply Kubernetes Manifests
         run: |
           NS="${{ steps.ns.outputs.ns }}"
           kubectl apply -n "$NS" -f output/deployment.yaml
           kubectl apply -n "$NS" -f output/service.yaml
 
-
   # ──────────────────────────────
-  # 3. Verify Deployment
+  # 3. Verify Rollout
   # ──────────────────────────────
   verify:
     needs: deploy
@@ -146,7 +141,8 @@ jobs:
             echo "ns=leninkart-prod" >> $GITHUB_OUTPUT
           fi
 
-      - name: Wait for Rollout
+      - name: Verify Deployment Rollout
         run: |
           kubectl rollout status deployment/product-service \
-            -n "${{ steps.ns.outputs.ns }}" --timeout=300s
+            -n "${{ steps.ns.outputs.ns }}" \
+            --timeout=300s
