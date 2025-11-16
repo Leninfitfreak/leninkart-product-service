@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image: ${{ steps.build-image.outputs.image }}
+      image: ${{ steps.export-image.outputs.image }}
 
     steps:
       - name: Checkout
@@ -41,7 +41,14 @@ jobs:
           docker build -t $IMAGE .
           docker push $IMAGE
 
-          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+          # Export as environment variable for next step
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Export image output
+        id: export-image
+        run: |
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+
 
 
   deploy:
@@ -89,7 +96,6 @@ jobs:
 
           echo "Using image: $IMAGE"
 
-          # Replace ONLY IMAGE_PLACEHOLDER (bullet-proof)
           sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" output/deployment.yaml
 
           echo "--- Final Deployment YAML ---"
@@ -99,6 +105,7 @@ jobs:
         run: |
           kubectl apply -n ${{ steps.ns.outputs.namespace }} -f output/deployment.yaml
           kubectl apply -n ${{ steps.ns.outputs.namespace }} -f output/service.yaml
+
 
 
   verify:
@@ -122,7 +129,6 @@ jobs:
         id: ns
         run: |
           BRANCH="${GITHUB_REF##*/}"
-
           if [[ "$BRANCH" == "dev" ]]; then
             echo "namespace=leninkart-dev" >> $GITHUB_OUTPUT
           elif [[ "$BRANCH" == "staging" ]]; then
