@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image: ${{ steps.build-image.outputs.image }}
+      image: ${{ steps.set-image.outputs.image }}
 
     steps:
       - name: Checkout
@@ -32,17 +32,19 @@ jobs:
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 
       - name: Build & Push Docker Image
-        id: build-image
         run: |
           TAG=${{ github.sha }}
           IMAGE="$IMAGE_BASE/$SERVICE_NAME:$TAG"
-          echo "Building image: $IMAGE"
 
+          echo "Building image: $IMAGE"
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
-          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
+      - name: Export image for next job
+        id: set-image
+        run: echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
 
   deploy:
@@ -83,10 +85,13 @@ jobs:
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
-      - name: Inject image
+      - name: Inject image into manifest
         run: |
-          echo "Using image: ${{ needs.build.outputs.image }}"
-          sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image }}|g" output/deployment.yaml
+          IMAGE="${{ needs.build.outputs.image }}"
+          echo "Using image: $IMAGE"
+
+          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" output/deployment.yaml
+
           cat output/deployment.yaml
 
       - name: Apply manifests
