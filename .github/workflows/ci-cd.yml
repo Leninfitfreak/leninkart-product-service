@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image: ${{ steps.build.outputs.image }}
+      image: ${{ steps.build-image.outputs.image }}
 
     steps:
       - name: Checkout
@@ -32,17 +32,17 @@ jobs:
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 
       - name: Build & Push Docker Image
-        id: build
+        id: build-image
         run: |
           TAG=${{ github.sha }}
           IMAGE="$IMAGE_BASE/$SERVICE_NAME:$TAG"
-
           echo "Building image: $IMAGE"
+
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
-          # Export final IMAGE output
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
 
 
   deploy:
@@ -83,51 +83,13 @@ jobs:
           cp k8s/deployment.yaml output/deployment.yaml
           cp k8s/service.yaml output/service.yaml
 
-      - name: Inject image into deployment
+      - name: Inject image
         run: |
-          IMAGE="${{ needs.build.outputs.image }}"
-          echo "Using image: $IMAGE"
-
-          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" output/deployment.yaml
-
-          echo "--- Final Deployment YAML ---"
+          echo "Using image: ${{ needs.build.outputs.image }}"
+          sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image }}|g" output/deployment.yaml
           cat output/deployment.yaml
 
       - name: Apply manifests
         run: |
           kubectl apply -n ${{ steps.namespace.outputs.ns }} -f output/deployment.yaml
           kubectl apply -n ${{ steps.namespace.outputs.ns }} -f output/service.yaml
-
-
-  verify:
-    needs: deploy
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Get GKE Credentials
-        uses: google-github-actions/get-gke-credentials@v2
-        with:
-          cluster_name: ${{ secrets.GKE_CLUSTER }}
-          location: ${{ secrets.GKE_REGION }}
-          project_id: ${{ secrets.GCP_PROJECT }}
-
-      - name: Determine namespace
-        id: namespace
-        run: |
-          BRANCH="${GITHUB_REF##*/}"
-          if [[ "$BRANCH" == "dev" ]]; then
-            echo "ns=leninkart-dev" >> $GITHUB_OUTPUT
-          elif [[ "$BRANCH" == "staging" ]]; then
-            echo "ns=leninkart-staging" >> $GITHUB_OUTPUT
-          else
-            echo "ns=leninkart-prod" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Verify rollout
-        run: |
-          kubectl rollout status deployment/product-service -n ${{ steps.namespace.outputs.ns }}
