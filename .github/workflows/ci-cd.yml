@@ -90,8 +90,8 @@ jobs:
 
       - name: Commit & Push changes
         run: |
-          git config --global user.email "ci-bot@github.com"
-          git config --global user.name "GitHub Actions CI"
+          git config --global user.email "Leninfitfreak@gmail.com"
+          git config --global user.name "Leningithubactions"
 
           git add ${{ env.VALUES_FILE }}
           git commit -m "Update image for ${{ env.SERVICE_NAME }} -> ${{ needs.build.outputs.image_tag }}" || echo "No changes to commit"
