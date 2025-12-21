@@ -17,7 +17,8 @@ env:
 
   # Helm paths
   CHART_PATH: helm/product-service
-  VALUES_FILE: helm/product-service/values.yaml
+  VALUES_FILE: helm/product-service/values-dev.yaml
+
 
   # Secret variable names (fully variablized)
   SECRET_GCP_SA: GCP_SA_KEY
