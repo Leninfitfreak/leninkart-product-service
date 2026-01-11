@@ -76,7 +76,7 @@ jobs:
           sed -i "s|tag:.*|tag: \"$IMAGE_TAG\"|g" ${{ env.VALUES_FILE }}
 
       - name: Commit & Push changes
-        run: |
+        run: |   
           git config --global user.email "Leninfitfreak@gmail.com"
           git config --global user.name "Leningithubactions"
           git add ${{ env.VALUES_FILE }}
