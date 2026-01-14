@@ -1,141 +1,84 @@
-name: CI/CD for product-service (dev → staging → prod)
+name: CI/CD for Product-Service (via Helm + ArgoCD)
 
 on:
   push:
     branches:
       - dev
-      - staging
-      - main
-
-permissions:
-  contents: write
-  id-token: write
 
 env:
   SERVICE_NAME: product-service
+  REGION: asia-south1
+  
+  INFRA_REPO: leninkart-infra
+  INFRA_BRANCH: dev
 
-  # 🔽 Docker Hub base (ONLY change vs GAR)
-  IMAGE_BASE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/product-service
+  CHART_PATH: helm/product-service
+  VALUES_FILE: helm/product-service/values-dev.yaml
 
-  # Infra repo details (unchanged)
-  INFRA_REPO: ${{ secrets.INFRA_REPO }}
-  INFRA_CHART_PATH: helm/product-service
-  VALUES_PATH: helm/product-service/values.yaml
+  SECRET_GCP_SA: GCP_SA_KEY
+  SECRET_PROJECT: GCP_PROJECT
+  SECRET_ARTIFACT_REPO: ARTIFACT_REPO
+  SECRET_INFRA_PAT: INFRA_PAT
 
 jobs:
-# ─────────────────────────────────────────
-# 1) BUILD & PUSH IMAGE (Docker Hub)
-# ─────────────────────────────────────────
   build:
-    name: Build & Push image
     runs-on: ubuntu-latest
 
     outputs:
-      image: ${{ steps.set-output.outputs.image }}
-      short_sha: ${{ steps.set-output.outputs.short_sha }}
+      image_tag: ${{ steps.export.outputs.image_tag }}
+      image_full: ${{ steps.export.outputs.image_full }}
 
     steps:
-      - name: Checkout product repo
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      # 🔐 Docker Hub Login (NEW)
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          credentials_json: ${{ secrets[env.SECRET_GCP_SA] }}
 
-      - name: Set image variables
-        id: set-vars
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build Docker Image
         run: |
-          FULL_SHA=${{ github.sha }}
-          SHORT_SHA=${FULL_SHA:0:7}
-          BRANCH_SAFE=$(echo "${{ github.ref_name }}" | tr '/' '-')
-          TAG="${BRANCH_SAFE}-${SHORT_SHA}"
-          IMAGE="${IMAGE_BASE}:${TAG}"
+          TAG="${{ github.sha }}"
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ secrets[env.SECRET_PROJECT] }}/${{ secrets[env.SECRET_ARTIFACT_REPO] }}/${{ env.SERVICE_NAME }}:${TAG}"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          docker build -t "$IMAGE" .
 
-          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
-          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+      - name: Push Docker Image
+        run: docker push "$IMAGE"
 
-      - name: Build & Push Docker image
+      - name: Export Image Output
+        id: export
         run: |
-          echo "Building image: ${{ steps.set-vars.outputs.image }}"
-          docker build -t ${{ steps.set-vars.outputs.image }} .
-          docker push ${{ steps.set-vars.outputs.image }}
+          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "image_full=$IMAGE" >> $GITHUB_OUTPUT
 
-      - name: Expose image output
-        id: set-output
-        run: |
-          echo "image=${{ steps.set-vars.outputs.image }}" >> $GITHUB_OUTPUT
-          echo "short_sha=${{ steps.set-vars.outputs.short_sha }}" >> $GITHUB_OUTPUT
-
-# ─────────────────────────────────────────
-# 2) UPDATE HELM VALUES IN INFRA REPO
-# ─────────────────────────────────────────
-  update-infra:
-    name: Update infra chart values
+  update-helm-values:
     needs: build
     runs-on: ubuntu-latest
 
-    env:
-      IMAGE_TO_SET: ${{ needs.build.outputs.image }}
-
     steps:
-      - name: Checkout infra repo
+      - name: Checkout Infra Repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.INFRA_REPO }}
-          token: ${{ secrets.INFRA_REPO_TOKEN }}
-          ref: main
+          repository: ${{ github.repository_owner }}/${{ env.INFRA_REPO }}
+          token: ${{ secrets[env.SECRET_INFRA_PAT] }}
+          ref: ${{ env.INFRA_BRANCH }}
 
-      - name: Install yq
+      - name: Update Helm values.yaml
         run: |
-          wget https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64 -O /usr/local/bin/yq
-          chmod +x /usr/local/bin/yq
+          IMAGE_REPO="${{ env.REGION }}-docker.pkg.dev/${{ secrets[env.SECRET_PROJECT] }}/${{ secrets[env.SECRET_ARTIFACT_REPO] }}/${{ env.SERVICE_NAME }}"
+          IMAGE_TAG="${{ needs.build.outputs.image_tag }}"
+          sed -i "s|repository:.*|repository: $IMAGE_REPO|g" ${{ env.VALUES_FILE }}
+          sed -i "s|tag:.*|tag: \"$IMAGE_TAG\"|g" ${{ env.VALUES_FILE }}
 
-      - name: Update values.yaml
-        run: |
-          echo "Setting image: ${IMAGE_TO_SET}"
-
-          yq eval \
-            ".image.repository = \"${IMAGE_TO_SET%:*}\" |
-             .image.tag = \"${IMAGE_TO_SET##*:}\"" \
-            -i ${VALUES_PATH}
-
-          echo "---- Updated values.yaml ----"
-          sed -n '1,200p' ${VALUES_PATH}
-
-      - name: Commit & push changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add ${VALUES_PATH}
-          git commit -m "ci: update product-service image -> ${IMAGE_TO_SET}" || exit 0
-          git push origin main
-
-# ─────────────────────────────────────────
-# 3) OPTIONAL: TRIGGER ARGOCD SYNC
-# ─────────────────────────────────────────
-  trigger-argocd-sync:
-    needs: update-infra
-    runs-on: ubuntu-latest
-    if: ${{ secrets.ARGOCD_SERVER && secrets.ARGOCD_AUTH_TOKEN && secrets.ARGOCD_APP_NAME }}
-
-    steps:
-      - name: Install argocd CLI
-        run: |
-          curl -sSL -o /usr/local/bin/argocd \
-          https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-          chmod +x /usr/local/bin/argocd
-
-      - name: Login to ArgoCD
-        run: |
-          argocd login ${{ secrets.ARGOCD_SERVER }} \
-            --auth-token ${{ secrets.ARGOCD_AUTH_TOKEN }} \
-            --insecure
-
-      - name: Sync application
-        run: |
-          argocd app sync ${{ secrets.ARGOCD_APP_NAME }} --grpc-web
-          argocd app wait ${{ secrets.ARGOCD_APP_NAME }} --health --timeout 300
+      - name: Commit & Push changes
+        run: |   
+          git config --global user.email "Leninfitfreak@gmail.com"
+          git config --global user.name "Leningithubactions"
+          git add ${{ env.VALUES_FILE }}
+          git commit -m "Update image for product-service -> ${{ needs.build.outputs.image_tag }}" || echo "No changes"
+          git push origin "${{ env.INFRA_BRANCH }}"
