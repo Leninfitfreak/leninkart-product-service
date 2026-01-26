@@ -1,4 +1,4 @@
-<AUTO-KAFKA PRODUCT CONTROLLER CODE>package com.example.product.controller;
+package com.example.product.controller;
 import com.example.product.model.Product; import com.example.product.repo.ProductRepository; import org.springframework.http.ResponseEntity; import org.springframework.kafka.core.KafkaTemplate; import org.springframework.web.bind.annotation.*; import java.util.List; import java.util.Optional;
 @RestController @RequestMapping("/api/products") public class ProductController {
  private final ProductRepository repo; private final KafkaTemplate<String,String> kafka;
