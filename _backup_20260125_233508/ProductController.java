@@ -41,7 +41,6 @@ public class ProductController {
             System.out.println("✅ Published to Kafka: " + payload);
         } catch (Exception e) {
             System.err.println("❌ Failed to publish to Kafka: " + e.getMessage());
-            e.printStackTrace();
         }
         
         return saved;
