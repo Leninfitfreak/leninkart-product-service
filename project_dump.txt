@@ -1,0 +1,374 @@
+# Project Dump - Root: C:\Users\Lenovo\Desktop\dust\leninkart-product-service
+
+### FILE: .gitignore
+```
+.env
+*.pem
+*.key
+*.crt
+*.log
+node_modules
+target
+__pycache__
+.idea
+.vscode
+*.bak
+```
+
+### FILE: Dockerfile
+```
+FROM maven:3.8.8-eclipse-temurin-17 as builder
+WORKDIR /app
+COPY pom.xml .
+COPY src ./src
+RUN mvn -T1C -DskipTests clean package -DskipTests=true
+FROM eclipse-temurin:17-jdk-jammy
+WORKDIR /app
+COPY --from=builder /app/target/*.jar app.jar
+ENTRYPOINT ["sh","-c","java -jar /app/app.jar"]
+```
+
+### FILE: dump.py
+```
+import os
+import argparse
+
+def dump_project_to_file(root_dir='.', output_file='project_dump.txt', ignore_dirs=None, ignore_files=None):
+    if ignore_dirs is None:
+        ignore_dirs = {'.git', '__pycache__', '.idea', '.vscode', 'node_modules', 'build', 'dist', '.gradle'}
+    if ignore_files is None:
+        ignore_files = {'.DS_Store', 'Thumbs.db'}
+
+    with open(output_file, 'w', encoding='utf-8') as outfile:
+        outfile.write(f"# Project Dump - Root: {os.path.abspath(root_dir)}\n\n")
+
+        for current_dir, dirs, files in os.walk(root_dir):
+            # Skip ignored directories (in-place modification)
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
+
+            relative_dir = os.path.relpath(current_dir, root_dir)
+            if relative_dir != '.':
+                outfile.write(f"### DIRECTORY: {relative_dir}/\n\n")
+
+            for file_name in sorted(files):
+                if file_name in ignore_files:
+                    continue
+
+                file_path = os.path.join(current_dir, file_name)
+                relative_path = os.path.relpath(file_path, root_dir)
+
+                outfile.write(f"### FILE: {relative_path}\n")
+                outfile.write("```\n")
+
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    outfile.write(content.rstrip() + "\n")  # Ensure trailing newline
+                except UnicodeDecodeError:
+                    outfile.write("<BINARY OR NON-UTF8 FILE - CONTENT SKIPPED>\n")
+                except PermissionError:
+                    outfile.write("<PERMISSION DENIED - CONTENT SKIPPED>\n")
+                except Exception as e:
+                    outfile.write(f"<ERROR READING FILE: {str(e)}>\n")
+
+                outfile.write("```\n\n")
+
+    print(f"Project dump completed! File saved as '{output_file}' in the current directory.")
+    print("Share the content of this file with me — I'll analyze every line and fix LeninKart!")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Dump entire project file structure and content to a single text file")
+    parser.add_argument('-o', '--output', default='project_dump.txt', help='Output file name (default: project_dump.txt)')
+    parser.add_argument('-r', '--root', default='.', help='Root directory to scan (default: current directory)')
+
+    args = parser.parse_args()
+
+    dump_project_to_file(root_dir=args.root, output_file=args.output)
+```
+
+### FILE: pom.xml
+```
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.3.0</version>
+    <relativePath/> <!-- lookup from Maven Central -->
+  </parent>
+
+  <groupId>com.example</groupId>
+  <artifactId>leninkart-product-service</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+  <name>Product Service</name>
+  <description>LeninKart Product Service Service</description>
+
+  <properties>
+    <java.version>17</java.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+```
+
+### FILE: project_dump.txt
+```
+
+```
+
+### DIRECTORY: .github/
+
+### DIRECTORY: .github\workflows/
+
+### FILE: .github\workflows\ci-cd.yml
+```
+name: CI/CD for Product-Service (via Helm + ArgoCD)
+
+on:
+  push:
+    branches:
+      - dev
+
+env:
+  SERVICE_NAME: product-service
+  REGION: asia-south1
+  
+  INFRA_REPO: leninkart-infra
+  INFRA_BRANCH: dev
+
+  CHART_PATH: helm/product-service
+  VALUES_FILE: helm/product-service/values-dev.yaml
+
+  SECRET_GCP_SA: GCP_SA_KEY
+  SECRET_PROJECT: GCP_PROJECT
+  SECRET_ARTIFACT_REPO: ARTIFACT_REPO
+  SECRET_INFRA_PAT: INFRA_PAT
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.export.outputs.image_tag }}
+      image_full: ${{ steps.export.outputs.image_full }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # 🔽 Docker Hub login (ONLY NEW PART)
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 🔽 Build image (CHANGED IMAGE PATH ONLY)
+      - name: Build Docker Image
+        run: |
+          TAG="${{ github.sha }}"
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.SERVICE_NAME }}:${TAG}"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          docker build -t "$IMAGE" .
+
+      # 🔽 Push to Docker Hub (same command)
+      - name: Push Docker Image
+        run: docker push "$IMAGE"
+
+      - name: Export Image Output
+        id: export
+        run: |
+          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "image_full=$IMAGE" >> $GITHUB_OUTPUT
+
+  update-helm-values:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Infra Repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/${{ env.INFRA_REPO }}
+          token: ${{ secrets[env.SECRET_INFRA_PAT] }}
+          ref: ${{ env.INFRA_BRANCH }}
+
+      # 🔽 Update image repo + tag (Docker Hub path)
+      - name: Update Helm values.yaml
+        run: |
+          IMAGE_REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.SERVICE_NAME }}"
+          IMAGE_TAG="${{ needs.build.outputs.image_tag }}"
+          sed -i "s|repository:.*|repository: $IMAGE_REPO|g" ${{ env.VALUES_FILE }}
+          sed -i "s|tag:.*|tag: \"$IMAGE_TAG\"|g" ${{ env.VALUES_FILE }}
+
+      - name: Commit & Push changes
+        run: |   
+          git config --global user.email "Leninfitfreak@gmail.com"
+          git config --global user.name "Leningithubactions"
+          git add ${{ env.VALUES_FILE }}
+          git commit -m "Update image for product-service -> ${{ needs.build.outputs.image_tag }}" || echo "No changes"
+          git push origin "${{ env.INFRA_BRANCH }}"
+```
+
+### DIRECTORY: k8s/
+
+### FILE: k8s\deployment.yaml
+```
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service
+  labels:
+    app: product-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: product-service
+  template:
+    metadata:
+      labels:
+        app: product-service
+    spec:
+      containers:
+        - name: product-service
+          image: IMAGE_PLACEHOLDER
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+```
+
+### FILE: k8s\service.yaml
+```
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: product-service
+  ports:
+    - port: 80
+      targetPort: 8080
+```
+
+### DIRECTORY: src/
+
+### DIRECTORY: src\main/
+
+### DIRECTORY: src\main\java/
+
+### DIRECTORY: src\main\java\com/
+
+### DIRECTORY: src\main\java\com\example/
+
+### DIRECTORY: src\main\java\com\example\product/
+
+### FILE: src\main\java\com\example\product\ProductServiceApplication.java
+```
+package com.example.product; import org.springframework.boot.SpringApplication; import org.springframework.boot.autoconfigure.SpringBootApplication; @SpringBootApplication public class ProductServiceApplication{ public static void main(String[] args){ SpringApplication.run(ProductServiceApplication.class,args);} }
+```
+
+### DIRECTORY: src\main\java\com\example\product\config/
+
+### FILE: src\main\java\com\example\product\config\KafkaProducerConfig.java
+```
+package com.example.product.config;
+import org.springframework.context.annotation.Bean; import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory; import org.springframework.kafka.core.KafkaTemplate; import org.springframework.kafka.core.ProducerFactory;
+import org.apache.kafka.clients.producer.ProducerConfig; import org.apache.kafka.common.serialization.StringSerializer;
+import java.util.HashMap; import java.util.Map;
+@Configuration public class KafkaProducerConfig {
+ @Bean public ProducerFactory<String,String> producerFactory(){ Map<String,Object> props=new HashMap<>(); props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,System.getenv().getOrDefault("KAFKA_BOOTSTRAP_SERVERS","kafka:9092")); props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,StringSerializer.class); props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,StringSerializer.class); return new DefaultKafkaProducerFactory<>(props); }
+ @Bean public KafkaTemplate<String,String> kafkaTemplate(){ return new KafkaTemplate<>(producerFactory()); }
+}
+```
+
+### DIRECTORY: src\main\java\com\example\product\controller/
+
+### FILE: src\main\java\com\example\product\controller\ProductController.java
+```
+package com.example.product.controller;
+import com.example.product.model.Product; import com.example.product.repo.ProductRepository; import org.springframework.http.ResponseEntity; import org.springframework.kafka.core.KafkaTemplate; import org.springframework.web.bind.annotation.*; import java.util.List; import java.util.Optional;
+@RestController @RequestMapping("/api/products") public class ProductController {
+ private final ProductRepository repo; private final KafkaTemplate<String,String> kafka;
+ public ProductController(ProductRepository repo,KafkaTemplate<String,String> kafka){this.repo=repo;this.kafka=kafka;}
+ @GetMapping public List<Product> all(){return repo.findAll();}
+ @PostMapping public Product create(@RequestBody Product p){return repo.save(p);}
+ @PostMapping("/{id}/order") public ResponseEntity<String> order(@PathVariable Long id){ Optional<Product> op=repo.findById(id); if(op.isEmpty()) return ResponseEntity.notFound().build(); Product p=op.get(); String payload=String.format("{\"productId\":%d,\"name\":\"%s\",\"price\":%s}",p.getId(),p.getName(),p.getPrice()); kafka.send("product-orders",payload); return ResponseEntity.ok("order-sent"); }
+}
+```
+
+### DIRECTORY: src\main\java\com\example\product\model/
+
+### FILE: src\main\java\com\example\product\model\Product.java
+```
+package com.example.product.model;
+import jakarta.persistence.*;
+@Entity @Table(name="products")
+public class Product {
+ @Id @GeneratedValue(strategy=GenerationType.IDENTITY) private Long id;
+ private String name; private String description; private Double price;
+ public Product(){} public Product(String name,String description,Double price){this.name=name;this.description=description;this.price=price;}
+ public Long getId(){return id;} public String getName(){return name;} public String getDescription(){return description;} public Double getPrice(){return price;}
+ public void setName(String n){this.name=n;} public void setDescription(String d){this.description=d;} public void setPrice(Double p){this.price=p;}
+}
+```
+
+### DIRECTORY: src\main\java\com\example\product\repo/
+
+### FILE: src\main\java\com\example\product\repo\ProductRepository.java
+```
+package com.example.product.repo; import com.example.product.model.Product; import org.springframework.data.jpa.repository.JpaRepository; public interface ProductRepository extends JpaRepository<Product,Long>{ }
+```
+
+### DIRECTORY: src\main\resources/
+
+### FILE: src\main\resources\application.properties
+```
+spring.datasource.url=jdbc:postgresql://postgres:5432/${DB_NAME:ecom}
+spring.datasource.username=${DB_USER:postgres}
+spring.datasource.password=${DB_PASS:postgres}
+spring.jpa.hibernate.ddl-auto=update
+server.port=8081
+spring.kafka.bootstrap-servers=${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+```
+
