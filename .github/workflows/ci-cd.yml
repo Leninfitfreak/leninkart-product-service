@@ -4,17 +4,21 @@ on:
   push:
     branches:
       - dev
+      - staging
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: product-service-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   SERVICE_NAME: product-service
   REGION: asia-south1
-  
   INFRA_REPO: leninkart-infra
   INFRA_BRANCH: dev
-
   CHART_PATH: helm/product-service
   VALUES_FILE: helm/product-service/values-dev.yaml
-
   SECRET_GCP_SA: GCP_SA_KEY
   SECRET_PROJECT: GCP_PROJECT
   SECRET_ARTIFACT_REPO: ARTIFACT_REPO
@@ -23,45 +27,53 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     outputs:
       image_tag: ${{ steps.export.outputs.image_tag }}
       image_full: ${{ steps.export.outputs.image_full }}
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # 🔽 Docker Hub login (ONLY NEW PART)
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 🔽 Build image (CHANGED IMAGE PATH ONLY)
       - name: Build Docker Image
         run: |
-          TAG="${{ github.sha }}"
+          TAG="${{ github.run_id }}"
           IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.SERVICE_NAME }}:${TAG}"
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
           docker build -t "$IMAGE" .
 
-      # 🔽 Push to Docker Hub (same command)
       - name: Push Docker Image
         run: docker push "$IMAGE"
 
       - name: Export Image Output
         id: export
         run: |
-          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "image_tag=${{ github.run_id }}" >> $GITHUB_OUTPUT
           echo "image_full=$IMAGE" >> $GITHUB_OUTPUT
 
   update-helm-values:
     needs: build
     runs-on: ubuntu-latest
-
     steps:
+      - name: Select infra branch & values file
+        run: |
+          BRANCH="${GITHUB_REF##*/}"
+          if [[ "$BRANCH" == "main" ]]; then
+            echo "INFRA_BRANCH=main" >> "$GITHUB_ENV"
+            echo "VALUES_FILE=helm/product-service/values-prod.yaml" >> "$GITHUB_ENV"
+          elif [[ "$BRANCH" == "staging" ]]; then
+            echo "INFRA_BRANCH=staging" >> "$GITHUB_ENV"
+            echo "VALUES_FILE=helm/product-service/values-staging.yaml" >> "$GITHUB_ENV"
+          else
+            echo "INFRA_BRANCH=dev" >> "$GITHUB_ENV"
+            echo "VALUES_FILE=helm/product-service/values-dev.yaml" >> "$GITHUB_ENV"
+          fi
+
       - name: Checkout Infra Repo
         uses: actions/checkout@v4
         with:
@@ -69,18 +81,27 @@ jobs:
           token: ${{ secrets[env.SECRET_INFRA_PAT] }}
           ref: ${{ env.INFRA_BRANCH }}
 
-      # 🔽 Update image repo + tag (Docker Hub path)
+      - name: Install yq
+        uses: mikefarah/yq@v4
+
       - name: Update Helm values.yaml
         run: |
           IMAGE_REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.SERVICE_NAME }}"
           IMAGE_TAG="${{ needs.build.outputs.image_tag }}"
-          sed -i "s|repository:.*|repository: $IMAGE_REPO|g" ${{ env.VALUES_FILE }}
-          sed -i "s|tag:.*|tag: \"$IMAGE_TAG\"|g" ${{ env.VALUES_FILE }}
+          
+          echo "📁 Updating: $VALUES_FILE"
+          echo "📦 Image: $IMAGE_REPO:$IMAGE_TAG"
+          
+          yq -i ".image.repository = \"$IMAGE_REPO\"" "$VALUES_FILE"
+          yq -i ".image.tag = \"$IMAGE_TAG\"" "$VALUES_FILE"
+          
+          echo "✅ Updated file:"
+          cat "$VALUES_FILE"
 
       - name: Commit & Push changes
-        run: |   
+        run: |
           git config --global user.email "Leninfitfreak@gmail.com"
           git config --global user.name "Leningithubactions"
-          git add ${{ env.VALUES_FILE }}
-          git commit -m "Update image for product-service -> ${{ needs.build.outputs.image_tag }}" || echo "No changes"
-          git push origin "${{ env.INFRA_BRANCH }}"
+          git add "$VALUES_FILE"
+          git commit -m "deploy(product-service): run-${{ needs.build.outputs.image_tag }}" || echo "No changes"
+          git push origin "$INFRA_BRANCH"
