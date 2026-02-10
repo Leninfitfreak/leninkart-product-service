@@ -17,8 +17,8 @@ env:
   REGION: asia-south1
   INFRA_REPO: leninkart-infra
   INFRA_BRANCH: dev
-  CHART_PATH: helm/product-service
-  VALUES_FILE: helm/product-service/values-dev.yaml
+  CHART_PATH: applications/product-service/helm
+  VALUES_FILE: applications/product-service/helm/values-dev.yaml
   SECRET_GCP_SA: GCP_SA_KEY
   SECRET_PROJECT: GCP_PROJECT
   SECRET_ARTIFACT_REPO: ARTIFACT_REPO
