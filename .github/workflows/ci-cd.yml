@@ -65,13 +65,13 @@ jobs:
           BRANCH="${GITHUB_REF##*/}"
           if [[ "$BRANCH" == "main" ]]; then
             echo "INFRA_BRANCH=main" >> "$GITHUB_ENV"
-            echo "VALUES_FILE=helm/product-service/values-prod.yaml" >> "$GITHUB_ENV"
+            echo "VALUES_FILE=applications/product-service/helm/values-prod.yaml" >> "$GITHUB_ENV"
           elif [[ "$BRANCH" == "staging" ]]; then
             echo "INFRA_BRANCH=staging" >> "$GITHUB_ENV"
-            echo "VALUES_FILE=helm/product-service/values-staging.yaml" >> "$GITHUB_ENV"
+            echo "VALUES_FILE=applications/product-service/helm/values-staging.yaml" >> "$GITHUB_ENV"
           else
             echo "INFRA_BRANCH=dev" >> "$GITHUB_ENV"
-            echo "VALUES_FILE=helm/product-service/values-dev.yaml" >> "$GITHUB_ENV"
+            echo "VALUES_FILE=applications/product-service/helm/values-dev.yaml" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout Infra Repo
