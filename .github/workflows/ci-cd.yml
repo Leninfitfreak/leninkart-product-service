@@ -103,8 +103,12 @@ jobs:
       - name: Commit & Push changes
         run: |
           cd infra
-          git config --global user.email "Leninfitfreak@gmail.com"
-          git config --global user.name "Leningithubactions"
+          git config user.email "Leninfitfreak@gmail.com"
+          git config user.name "Leningithubactions"
           git add "$VALUES_FILE"
           git commit -m "deploy(product-service): run-${{ needs.build.outputs.image_tag }}" || echo "No changes"
-          git push origin "$INFRA_BRANCH"
+          for i in 1 2 3; do
+            git pull --rebase origin "$INFRA_BRANCH" && git push origin "$INFRA_BRANCH" && break
+            echo "Push retry $i failed, retrying..."
+            sleep 2
+          done
