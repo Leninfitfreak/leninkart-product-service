@@ -22,15 +22,26 @@ public class UserService {
         return repository.findByUsernameIgnoreCase(username.trim());
     }
 
-    public UserAccount createUser(String username, String password, String role) {
-        String normalized = username.trim();
-        String hash = encoder.encode(password);
-        String finalRole = role == null || role.isBlank() ? "USER" : role.toUpperCase();
-        return repository.save(new UserAccount(normalized, hash, finalRole));
+    public Optional<UserAccount> findByEmail(String email) {
+        if (email == null || email.isBlank()) {
+            return Optional.empty();
+        }
+        return repository.findByEmailIgnoreCase(email.trim());
     }
 
-    public Optional<UserAccount> authenticate(String username, String password) {
-        Optional<UserAccount> userOpt = findByUsername(username);
+    public UserAccount createUser(String fullName, String email, String password, String role) {
+        String normalizedEmail = email.trim().toLowerCase();
+        String hash = encoder.encode(password);
+        String finalRole = role == null || role.isBlank() ? "USER" : role.toUpperCase();
+        return repository.save(new UserAccount(normalizedEmail, normalizedEmail, fullName, hash, finalRole));
+    }
+
+    public Optional<UserAccount> authenticate(String principal, String password) {
+        Optional<UserAccount> userOpt = findByEmail(principal);
+        if (userOpt.isEmpty()) {
+            // Backward compatibility for old non-email users.
+            userOpt = findByUsername(principal);
+        }
         if (userOpt.isEmpty()) {
             return Optional.empty();
         }
@@ -62,10 +73,13 @@ public class UserService {
             if (username.isEmpty() || password.isEmpty()) {
                 continue;
             }
-            if (repository.existsByUsernameIgnoreCase(username)) {
+            String normalizedEmail = username.contains("@")
+                ? username.toLowerCase()
+                : (username.toLowerCase() + "@leninkart.local");
+            if (repository.existsByEmailIgnoreCase(normalizedEmail)) {
                 continue;
             }
-            createUser(username, password, role);
+            createUser(username, normalizedEmail, password, role);
         }
     }
 }

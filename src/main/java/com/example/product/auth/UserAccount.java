@@ -12,6 +12,12 @@ public class UserAccount {
     @Column(nullable = false, unique = true)
     private String username;
 
+    @Column(unique = true)
+    private String email;
+
+    @Column(name = "full_name")
+    private String fullName;
+
     @Column(nullable = false, name = "password_hash")
     private String passwordHash;
 
@@ -21,8 +27,10 @@ public class UserAccount {
     protected UserAccount() {
     }
 
-    public UserAccount(String username, String passwordHash, String role) {
+    public UserAccount(String username, String email, String fullName, String passwordHash, String role) {
         this.username = username;
+        this.email = email;
+        this.fullName = fullName;
         this.passwordHash = passwordHash;
         this.role = role;
     }
@@ -39,12 +47,28 @@ public class UserAccount {
         return passwordHash;
     }
 
+    public String getEmail() {
+        return email;
+    }
+
+    public String getFullName() {
+        return fullName;
+    }
+
     public String getRole() {
         return role;
     }
 
     public void setPasswordHash(String passwordHash) {
         this.passwordHash = passwordHash;
+    }
+
+    public void setEmail(String email) {
+        this.email = email;
+    }
+
+    public void setFullName(String fullName) {
+        this.fullName = fullName;
     }
 
     public void setRole(String role) {

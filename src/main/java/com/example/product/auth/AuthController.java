@@ -19,33 +19,41 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@RequestBody AuthRequest request) {
-        if (request == null || request.getUsername() == null || request.getPassword() == null) {
+        if (request == null || request.getPassword() == null) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
         }
-        Optional<UserAccount> userOpt = userService.authenticate(request.getUsername(), request.getPassword());
+        String principal = request.getEmail() != null && !request.getEmail().isBlank()
+            ? request.getEmail().trim()
+            : request.getUsername();
+        if (principal == null || principal.isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+        }
+        Optional<UserAccount> userOpt = userService.authenticate(principal, request.getPassword());
         if (userOpt.isEmpty()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         UserAccount user = userOpt.get();
-        String token = jwtService.generateToken(user.getUsername(), user.getRole());
-        return ResponseEntity.ok(new AuthResponse(token, user.getUsername(), user.getRole()));
+        String userId = user.getEmail() != null ? user.getEmail() : user.getUsername();
+        String token = jwtService.generateToken(userId, user.getRole());
+        return ResponseEntity.ok(new AuthResponse(token, userId, user.getRole()));
     }
 
     @PostMapping("/signup")
     public ResponseEntity<AuthResponse> signup(@RequestBody AuthRequest request) {
-        if (request == null || request.getUsername() == null || request.getPassword() == null) {
+        if (request == null || request.getEmail() == null || request.getPassword() == null || request.getFullName() == null) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
         }
-        String username = request.getUsername().trim();
+        String fullName = request.getFullName().trim();
+        String email = request.getEmail().trim().toLowerCase();
         String password = request.getPassword().trim();
-        if (username.isEmpty() || password.length() < 6) {
+        if (fullName.isEmpty() || email.isEmpty() || !email.contains("@") || password.length() < 6) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
         }
-        if (userService.findByUsername(username).isPresent()) {
+        if (userService.findByEmail(email).isPresent()) {
             return ResponseEntity.status(HttpStatus.CONFLICT).build();
         }
-        UserAccount created = userService.createUser(username, password, "USER");
-        String token = jwtService.generateToken(created.getUsername(), created.getRole());
-        return ResponseEntity.ok(new AuthResponse(token, created.getUsername(), created.getRole()));
+        UserAccount created = userService.createUser(fullName, email, password, "USER");
+        String token = jwtService.generateToken(created.getEmail(), created.getRole());
+        return ResponseEntity.ok(new AuthResponse(token, created.getEmail(), created.getRole()));
     }
 }
