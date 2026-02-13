@@ -2,6 +2,7 @@ package com.example.product.auth;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Optional;
@@ -49,11 +50,16 @@ public class AuthController {
         if (fullName.isEmpty() || email.isEmpty() || !email.contains("@") || password.length() < 6) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
         }
-        if (userService.findByEmail(email).isPresent()) {
+        if (userService.findByEmail(email).isPresent() || userService.findByUsername(email).isPresent()) {
             return ResponseEntity.status(HttpStatus.CONFLICT).build();
         }
-        UserAccount created = userService.createUser(fullName, email, password, "USER");
-        String token = jwtService.generateToken(created.getEmail(), created.getRole());
-        return ResponseEntity.ok(new AuthResponse(token, created.getEmail(), created.getRole()));
+        try {
+            UserAccount created = userService.createUser(fullName, email, password, "USER");
+            String token = jwtService.generateToken(created.getEmail(), created.getRole());
+            return ResponseEntity.ok(new AuthResponse(token, created.getEmail(), created.getRole()));
+        } catch (DataIntegrityViolationException ex) {
+            // Handles race conditions/legacy rows where username uniqueness still collides.
+            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+        }
     }
 }
