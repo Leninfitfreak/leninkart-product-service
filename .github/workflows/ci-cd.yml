@@ -40,6 +40,11 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Verify OpenTelemetry Java agent in build context
+        run: |
+          test -f otel/opentelemetry-javaagent.jar
+          ls -lh otel/opentelemetry-javaagent.jar
+
       - name: Build Docker Image
         run: |
           TAG="${{ github.run_id }}"
