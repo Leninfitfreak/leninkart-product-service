@@ -10,4 +10,4 @@ WORKDIR /app
 COPY --from=builder /app/target/*.jar app.jar
 COPY otel/opentelemetry-javaagent.jar /otel/opentelemetry-javaagent.jar
 EXPOSE 8081
-ENTRYPOINT ["sh", "-c", "java -javaagent:/otel/opentelemetry-javaagent.jar -Dotel.exporter.otlp.endpoint=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318} -Dotel.exporter.otlp.protocol=${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf} -Dotel.service.name=${OTEL_SERVICE_NAME:-product-service} -jar /app/app.jar"]
+ENTRYPOINT ["sh", "-c", "java -javaagent:/otel/opentelemetry-javaagent.jar -Dotel.exporter.otlp.endpoint=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318} -Dotel.exporter.otlp.protocol=${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf} -Dotel.service.name=${OTEL_SERVICE_NAME:-product-service} -Dotel.instrumentation.kafka.producer-propagation.enabled=true -Dotel.instrumentation.kafka.experimental-span-attributes=true -Dotel.instrumentation.logback-mdc.enabled=true -jar /app/app.jar"]
