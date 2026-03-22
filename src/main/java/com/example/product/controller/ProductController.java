@@ -1,8 +1,10 @@
 package com.example.product.controller;
 
 import com.example.product.model.Product;
+import com.example.product.observability.BusinessMetrics;
 import com.example.product.observability.StructuredLog;
 import com.example.product.repo.ProductRepository;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -21,10 +23,12 @@ public class ProductController {
 
     private final ProductRepository repo;
     private final KafkaTemplate<String, String> kafka;
+    private final BusinessMetrics metrics;
 
-    public ProductController(ProductRepository repo, KafkaTemplate<String, String> kafka) {
+    public ProductController(ProductRepository repo, KafkaTemplate<String, String> kafka, BusinessMetrics metrics) {
         this.repo = repo;
         this.kafka = kafka;
+        this.metrics = metrics;
     }
 
     @GetMapping
@@ -44,6 +48,7 @@ public class ProductController {
         String owner = (userId == null || userId.isBlank()) ? "anonymous" : userId.trim();
         p.setCreatedBy(owner);
         Product saved = repo.save(p);
+        metrics.recordProductCreated();
         StructuredLog.info(logger, "http.product.create", "Product created", Map.of(
             "product_id", saved.getId(),
             "created_by", owner
@@ -63,6 +68,8 @@ public class ProductController {
 
         Product p = op.get();
         String who = (userId == null || userId.isBlank()) ? "anonymous" : userId.trim();
+        metrics.recordOrderRequest();
+        Timer.Sample publishTimer = metrics.startOrderRequestPublish();
         String payload = String.format(
             "{\"productId\":%d,\"name\":\"%s\",\"price\":%s,\"user\":\"%s\"}",
             p.getId(),
@@ -78,10 +85,13 @@ public class ProductController {
         StructuredLog.info(logger, "kafka.produce.product-orders", "Publishing order request", fields);
 
         kafka.send("product-orders", payload).whenComplete((result, error) -> {
+            metrics.stopOrderRequestPublish(publishTimer);
             if (error != null) {
+                metrics.recordOrderRequestPublishFailure();
                 StructuredLog.error(logger, "kafka.produce.product-orders", "Failed to publish order request", error, fields);
                 return;
             }
+            metrics.recordOrderRequestPublishSuccess();
             Map<String, Object> successFields = new LinkedHashMap<>(fields);
             if (result != null && result.getRecordMetadata() != null) {
                 successFields.put("partition", result.getRecordMetadata().partition());
