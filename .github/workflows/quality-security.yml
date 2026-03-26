@@ -43,7 +43,7 @@ jobs:
         run: docker build -t leninkart/product-service:ci .
 
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.30.0
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           scan-type: fs
           scan-ref: .
@@ -53,7 +53,7 @@ jobs:
           exit-code: 0
 
       - name: Run Trivy image scan
-        uses: aquasecurity/trivy-action@0.30.0
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           image-ref: leninkart/product-service:ci
           format: table
