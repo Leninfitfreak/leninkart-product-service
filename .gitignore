@@ -9,3 +9,7 @@ __pycache__
 .idea
 .vscode
 *.bak
+project_dump.txt
+fix.py
+dump.py
+_backup*/
