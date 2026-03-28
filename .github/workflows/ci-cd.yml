@@ -1,4 +1,4 @@
-name: CI/CD for Product-Service (via Helm + ArgoCD)
+name: Product-Service CI + Latest Tag Publish
 
 on:
   push:
@@ -14,15 +14,10 @@ concurrency:
 
 env:
   SERVICE_NAME: product-service
-  REGION: asia-south1
-  INFRA_REPO: leninkart-infra
-  INFRA_BRANCH: dev
-  CHART_PATH: applications/product-service/helm
-  VALUES_FILE: applications/product-service/helm/values-dev.yaml
-  SECRET_GCP_SA: GCP_SA_KEY
-  SECRET_PROJECT: GCP_PROJECT
-  SECRET_ARTIFACT_REPO: ARTIFACT_REPO
-  SECRET_INFRA_PAT: INFRA_PAT
+  CONTROL_REPO: deployment-poc
+  CONTROL_BRANCH: main
+  TAG_METADATA_FILE: config/latest_tags.yaml
+  SECRET_CONTROL_PAT: INFRA_PAT
 
 jobs:
   build:
@@ -61,59 +56,68 @@ jobs:
           echo "image_tag=${{ github.run_id }}" >> $GITHUB_OUTPUT
           echo "image_full=$IMAGE" >> $GITHUB_OUTPUT
 
-  update-helm-values:
+  publish_latest_tag_metadata:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Select infra branch & values file
+      - name: Select deployment environment
         run: |
           BRANCH="${GITHUB_REF##*/}"
           if [[ "$BRANCH" == "main" ]]; then
-            echo "INFRA_BRANCH=main" >> "$GITHUB_ENV"
-            echo "VALUES_FILE=applications/product-service/helm/values-prod.yaml" >> "$GITHUB_ENV"
+            echo "DEPLOY_ENV=prod" >> "$GITHUB_ENV"
           elif [[ "$BRANCH" == "staging" ]]; then
-            echo "INFRA_BRANCH=staging" >> "$GITHUB_ENV"
-            echo "VALUES_FILE=applications/product-service/helm/values-staging.yaml" >> "$GITHUB_ENV"
+            echo "DEPLOY_ENV=staging" >> "$GITHUB_ENV"
           else
-            echo "INFRA_BRANCH=dev" >> "$GITHUB_ENV"
-            echo "VALUES_FILE=applications/product-service/helm/values-dev.yaml" >> "$GITHUB_ENV"
+            echo "DEPLOY_ENV=dev" >> "$GITHUB_ENV"
           fi
 
-      - name: Checkout Infra Repo
+      - name: Checkout deployment-poc metadata repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/${{ env.INFRA_REPO }}
-          token: ${{ secrets[env.SECRET_INFRA_PAT] }}
-          ref: ${{ env.INFRA_BRANCH }}
-          path: infra
+          repository: ${{ github.repository_owner }}/${{ env.CONTROL_REPO }}
+          token: ${{ secrets[env.SECRET_CONTROL_PAT] }}
+          ref: ${{ env.CONTROL_BRANCH }}
+          path: control-plane
 
       - name: Install yq
         uses: mikefarah/yq@v4
 
-      - name: Update Helm values.yaml
+      - name: Publish latest tag metadata
         run: |
-          cd infra
-          IMAGE_REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.SERVICE_NAME }}"
-          IMAGE_TAG="${{ needs.build.outputs.image_tag }}"
-          
-          echo "📁 Updating: $VALUES_FILE"
-          echo "📦 Image: $IMAGE_REPO:$IMAGE_TAG"
-          
-          yq -i ".image.repository = \"$IMAGE_REPO\"" "$VALUES_FILE"
-          yq -i ".image.tag = \"$IMAGE_TAG\"" "$VALUES_FILE"
-          
-          echo "✅ Updated file:"
-          cat "$VALUES_FILE"
+          cd control-plane
+          mkdir -p "$(dirname "$TAG_METADATA_FILE")"
+          if [[ ! -f "$TAG_METADATA_FILE" ]]; then
+            printf 'services: {}\n' > "$TAG_METADATA_FILE"
+          fi
+          export SERVICE_KEY="${{ env.SERVICE_NAME }}"
+          export IMAGE_REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.SERVICE_NAME }}"
+          export IMAGE_TAG="${{ needs.build.outputs.image_tag }}"
+          export UPDATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          export SOURCE_REPO="${GITHUB_REPOSITORY}"
+          export SOURCE_BRANCH="${GITHUB_REF_NAME}"
+          export DEPLOY_ENV
+          yq -i '
+            .services[strenv(SERVICE_KEY)][strenv(DEPLOY_ENV)].latest = strenv(IMAGE_TAG) |
+            .services[strenv(SERVICE_KEY)][strenv(DEPLOY_ENV)].image = strenv(IMAGE_REPO) |
+            .services[strenv(SERVICE_KEY)][strenv(DEPLOY_ENV)].updated_at = strenv(UPDATED_AT) |
+            .services[strenv(SERVICE_KEY)][strenv(DEPLOY_ENV)].source_repo = strenv(SOURCE_REPO) |
+            .services[strenv(SERVICE_KEY)][strenv(DEPLOY_ENV)].source_branch = strenv(SOURCE_BRANCH)
+          ' "$TAG_METADATA_FILE"
+          cat "$TAG_METADATA_FILE"
 
-      - name: Commit & Push changes
+      - name: Commit & push metadata update
         run: |
-          cd infra
-          git config user.email "Leninfitfreak@gmail.com"
-          git config user.name "Leningithubactions"
-          git add "$VALUES_FILE"
-          git commit -m "deploy(product-service): run-${{ needs.build.outputs.image_tag }}" || echo "No changes"
+          cd control-plane
+          git config user.email "github-actions@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add "$TAG_METADATA_FILE"
+          git commit -m "ci(tags): publish product-service ${DEPLOY_ENV} latest ${IMAGE_TAG}" || echo "No changes"
           for i in 1 2 3; do
-            git pull --rebase origin "$INFRA_BRANCH" && git push origin "$INFRA_BRANCH" && break
+            git pull --rebase origin "$CONTROL_BRANCH" && git push origin "$CONTROL_BRANCH" && break
             echo "Push retry $i failed, retrying..."
             sleep 2
           done
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
